@@ -247,7 +247,7 @@ This project is licensed under the ISC License - see the [LICENSE](LICENSE) file
 
 ## 📞 Support
 
-For support, email your-email@example.com or create an issue in the repository.
+For support, email Armankarami.job@gmail.com or create an issue in the repository.
 
 ---
 

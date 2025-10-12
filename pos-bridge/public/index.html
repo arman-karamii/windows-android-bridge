@@ -1,0 +1,87 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>POS Bridge Test</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; }
+      button { padding: 10px 14px; font-size: 16px; }
+      pre { background: #111; color: #eee; padding: 12px; border-radius: 8px; }
+      .ok { color: #0a0; }
+      .bad { color: #a00; }
+    </style>
+  </head>
+  <body>
+    <h1>POS Bridge Test</h1>
+    <p>WebSocket: <span id="wsStatus" class="bad">disconnected</span></p>
+    <p>Current Device: <span id="deviceStatus" class="bad">none</span></p>
+    <div id="deviceList" style="margin: 10px 0;"></div>
+    <button id="connectBtn">Connect</button>
+    <button id="scanBtn" disabled>Scan Devices</button>
+    <button id="payBtn" disabled>Start Payment (1250)</button>
+    <pre id="log"></pre>
+    <script>
+      let ws;
+      const log = (x) => (document.getElementById("log").textContent += x + "\n");
+      const setStatus = (ok) => {
+        const el = document.getElementById("wsStatus");
+        el.textContent = ok ? "connected" : "disconnected";
+        el.className = ok ? "ok" : "bad";
+        document.getElementById("payBtn").disabled = !ok;
+        document.getElementById("scanBtn").disabled = !ok;
+      };
+      
+      const updateDeviceStatus = (currentDevice, discoveredDevices) => {
+        const deviceEl = document.getElementById("deviceStatus");
+        const deviceListEl = document.getElementById("deviceList");
+        
+        if (currentDevice) {
+          deviceEl.textContent = currentDevice;
+          deviceEl.className = "ok";
+        } else {
+          deviceEl.textContent = "none";
+          deviceEl.className = "bad";
+        }
+        
+        // Update device list
+        if (discoveredDevices && discoveredDevices.length > 0) {
+          deviceListEl.innerHTML = "<strong>Discovered Devices:</strong><br>" + 
+            discoveredDevices.map(device => 
+              `${device.ip} (${device.status}) - ${new Date(device.lastSeen).toLocaleTimeString()}`
+            ).join("<br>");
+        } else {
+          deviceListEl.innerHTML = "";
+        }
+      };
+
+      document.getElementById("connectBtn").onclick = () => {
+        ws = new WebSocket("wss://localhost:6743");
+        ws.onopen = () => { setStatus(true); log("WS open"); };
+        ws.onclose = () => { setStatus(false); log("WS closed"); };
+        ws.onerror = (e) => log("WS error: " + e.message);
+        ws.onmessage = (e) => {
+          const data = JSON.parse(e.data);
+          log("WS message: " + e.data);
+          
+          if (data.type === "DEVICE_STATUS") {
+            updateDeviceStatus(data.currentDevice, data.discoveredDevices);
+          }
+        };
+      };
+      
+      document.getElementById("scanBtn").onclick = () => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ action: "SCAN_DEVICES" }));
+          log("Manual device scan requested");
+        }
+      };
+
+      document.getElementById("payBtn").onclick = () => {
+        const payload = { action: "START_PAYMENT", orderId: "O-"+Math.random().toString(36).slice(2), amount: 1250 };
+        ws.send(JSON.stringify(payload));
+        log("Sent: " + JSON.stringify(payload));
+      };
+    </script>
+  </body>
+</html>

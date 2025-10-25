@@ -19,7 +19,7 @@
     <div id="deviceList" style="margin: 10px 0;"></div>
     <button id="connectBtn">Connect</button>
     <button id="scanBtn" disabled>Scan Devices</button>
-    <button id="payBtn" disabled>Start Payment (1250)</button>
+    <button id="payBtn" disabled>Start Payment (1250 Rials)</button>
     <pre id="log"></pre>
     <script>
       let ws;
@@ -78,7 +78,7 @@
       };
 
       document.getElementById("payBtn").onclick = () => {
-        const payload = { action: "START_PAYMENT", orderId: "O-"+Math.random().toString(36).slice(2), amount: 1250 };
+        const payload = { action: "START_PAYMENT", amount: 1250 };
         ws.send(JSON.stringify(payload));
         log("Sent: " + JSON.stringify(payload));
       };

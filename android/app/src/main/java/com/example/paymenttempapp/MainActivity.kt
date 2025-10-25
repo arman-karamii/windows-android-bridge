@@ -30,21 +30,24 @@ import io.ktor.websocket.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeoutOrNull
 import java.time.Duration
 
-data class SaleReq(val amount: Int, val orderId: String)
+data class SaleReq(val amount: Int, val timeout: Long = 120000L)
 data class SaleRes(
     val status: String,
-    val orderId: String,
     val authCode: String,
-    val rrn: String,
-    val scheme: String = "VISA"
+    val rrn: String
 )
 
 class MainActivity : ComponentActivity() {
 
     private var server: ApplicationEngine? = null
     private val logMessages = mutableStateListOf<String>()
+    
+    // Single payment synchronization mechanism
+    private var currentPaymentDeferred: CompletableDeferred<TransactionResult>? = null
     
     /**
      * Activity result launcher for handling payment results from BehPardakht app
@@ -161,23 +164,79 @@ class MainActivity : ComponentActivity() {
                 }
                 post("/pay/sale") {
                     val req = call.receive<SaleReq>()
-                    addLog("Payment request received from PC: Order ${req.orderId}, Amount ${req.amount}")
-                    showToast("Payment request from PC: $${req.amount/100.0}")
+                    addLog("Payment request received from PC: Amount ${req.amount} Rials")
+                    showToast("Payment request from PC: ${req.amount} Rials")
                     
-                    // Simulate processing delay
-                    kotlinx.coroutines.delay(1500)
+                    // Check if payment is already in progress
+                    if (currentPaymentDeferred != null) {
+                        addLog("Payment already in progress, rejecting new request")
+                        call.respond(SaleRes(
+                            status = "REJECTED",
+                            authCode = "",
+                            rrn = ""
+                        ))
+                        return@post
+                    }
                     
-                    val response = SaleRes(
-                        status = "APPROVED",
-                        orderId = req.orderId,
-                        authCode = "123456",
-                        rrn = "999000123456"
-                    )
+                    // Amount is already in Rials, convert to string for BehPardakht
+                    val payableAmount = req.amount.toString()
                     
-                    addLog("Payment approved: ${response.status} - Auth: ${response.authCode}")
-                    showToast("Payment approved: ${response.authCode}")
+                    // Create deferred for this payment
+                    val deferred = CompletableDeferred<TransactionResult>()
+                    currentPaymentDeferred = deferred
                     
-                    call.respond(response)
+                    try {
+                        // Trigger BehPardakht payment
+                        callBehPardakhtPay(
+                            payableAmount = payableAmount,
+                            context = this@MainActivity,
+                            onStartPay = {
+                                addLog("Starting BehPardakht payment for amount: $payableAmount")
+                                showToast("Starting payment...")
+                            }
+                        ) {
+                            addLog("Payment completed")
+                        }
+                        
+                        // Wait for payment result with timeout
+                        val transactionResult = withTimeoutOrNull(req.timeout) {
+                            deferred.await()
+                        }
+                        
+                        val response = if (transactionResult != null) {
+                            if (transactionResult.isSuccessTransaction()) {
+                                addLog("Payment SUCCESS: Amount=${transactionResult.amount}, Auth=${transactionResult.responseCode}, RRN=${transactionResult.referenceNo}")
+                                SaleRes(
+                                    status = "APPROVED",
+                                    authCode = transactionResult.responseCode ?: "",
+                                    rrn = transactionResult.referenceNo ?: ""
+                                )
+                            } else {
+                                addLog("Payment FAILED: Code=${transactionResult.responseCode}, Reason=${transactionResult.settleFailReason}")
+                                SaleRes(
+                                    status = "DECLINED",
+                                    authCode = transactionResult.responseCode ?: "",
+                                    rrn = transactionResult.referenceNo ?: ""
+                                )
+                            }
+                        } else {
+                            addLog("Payment timeout after ${req.timeout}ms")
+                            SaleRes(
+                                status = "TIMEOUT",
+                                authCode = "",
+                                rrn = ""
+                            )
+                        }
+                        
+                        addLog("Payment response: ${response.status} - Auth: ${response.authCode}")
+                        showToast("Payment ${response.status.lowercase()}: ${response.authCode}")
+                        
+                        call.respond(response)
+                        
+                    } finally {
+                        // Clean up
+                        currentPaymentDeferred = null
+                    }
                 }
                 webSocket("/ws") {
                     addLog("WebSocket connection established")
@@ -219,14 +278,21 @@ class MainActivity : ComponentActivity() {
             if (transaction == null) {
                 addLog("Failed to parse payment result")
                 showToast("Payment result parsing failed")
+                // Complete with error if payment is pending
+                currentPaymentDeferred?.completeExceptionally(Exception("Failed to parse payment result"))
                 return
             }
             
             if (transaction.status == null || transaction.responseCode == null) {
                 addLog("Invalid payment result data")
                 showToast("Invalid payment result")
+                // Complete with error if payment is pending
+                currentPaymentDeferred?.completeExceptionally(Exception("Invalid payment result data"))
                 return
             }
+            
+            // Complete the pending payment request
+            currentPaymentDeferred?.complete(transaction)
             
             lifecycleScope.launch {
                 if (transaction.isSuccessTransaction()) {
@@ -240,6 +306,8 @@ class MainActivity : ComponentActivity() {
         } catch (e: Exception) {
             addLog("Error handling payment result: ${e.message}")
             showToast("Error processing payment result")
+            // Complete with error if payment is pending
+            currentPaymentDeferred?.completeExceptionally(e)
         }
     }
 }

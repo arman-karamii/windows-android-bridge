@@ -177,10 +177,10 @@ wss.on("connection", (ws, req) => {
         
         try {
           const terminalBase = `http://${currentDevice}:${ANDROID_PORT}`;
-          const payload = { amount: msg.amount, orderId: msg.orderId };
+          const payload = { amount: msg.amount, timeout: msg.timeout || 120000 };
           
           console.log(`Sending payment to ${terminalBase}/pay/sale`);
-          const res = await axios.post(`${terminalBase}/pay/sale`, payload, { timeout: 10000 });
+          const res = await axios.post(`${terminalBase}/pay/sale`, payload, { timeout: 150000 });
           ws.send(JSON.stringify({ type: "RESULT", ...res.data }));
         } catch (error) {
           console.error("Payment API error:", error.message);

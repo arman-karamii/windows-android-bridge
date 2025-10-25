@@ -4,6 +4,7 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -44,6 +45,20 @@ class MainActivity : ComponentActivity() {
 
     private var server: ApplicationEngine? = null
     private val logMessages = mutableStateListOf<String>()
+    
+    /**
+     * Activity result launcher for handling payment results from BehPardakht app
+     */
+    var resultLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode == RESULT_OK) {
+                val resultBEH = result.data?.extras?.getString("PaymentResult")
+                handleTransactionResultBehPardakht(resultBEH ?: "")
+            } else {
+                addLog("Payment cancelled or failed")
+                showToast("Payment cancelled")
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -66,6 +81,24 @@ class MainActivity : ComponentActivity() {
                     text = "Server running on: http://0.0.0.0:8080",
                     style = MaterialTheme.typography.bodyMedium
                 )
+
+                Button(onClick = {
+                    // Trigger BehPardakht payment
+                    val payableAmount = "25000" // 1000.00 in Rials (example amount)
+                    callBehPardakhtPay(
+                        payableAmount = payableAmount,
+                        context = context,
+                        onStartPay = {
+                            addLog("Starting BehPardakht payment for amount: $payableAmount")
+                            showToast("Starting payment...")
+                        }
+                    ) {
+                        addLog("Payment completed")
+                    }
+                }) {
+                    Text("doPayment")
+                }
+                
                 
                 Text(
                     text = "Log Messages:",
@@ -174,5 +207,39 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         server?.stop(500, 1000)
         super.onDestroy()
+    }
+    
+    /**
+     * Handles the transaction result from BehPardakht payment app
+     */
+    private fun handleTransactionResultBehPardakht(result: String) {
+        try {
+            val transaction = behTransactionDtoConverter(result)
+            
+            if (transaction == null) {
+                addLog("Failed to parse payment result")
+                showToast("Payment result parsing failed")
+                return
+            }
+            
+            if (transaction.status == null || transaction.responseCode == null) {
+                addLog("Invalid payment result data")
+                showToast("Invalid payment result")
+                return
+            }
+            
+            lifecycleScope.launch {
+                if (transaction.isSuccessTransaction()) {
+                    addLog("Payment SUCCESS: Amount=${transaction.amount}, Auth=${transaction.responseCode}, RRN=${transaction.referenceNo}")
+                    showToast("Payment successful! Amount: ${transaction.amount}")
+                } else {
+                    addLog("Payment FAILED: Code=${transaction.responseCode}, Reason=${transaction.settleFailReason}")
+                    showToast("Payment failed: ${transaction.settleFailReason}")
+                }
+            }
+        } catch (e: Exception) {
+            addLog("Error handling payment result: ${e.message}")
+            showToast("Error processing payment result")
+        }
     }
 }
